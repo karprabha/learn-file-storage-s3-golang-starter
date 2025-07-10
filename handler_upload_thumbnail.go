@@ -1,10 +1,14 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -42,17 +46,24 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	mediaType := header.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse media type", err)
+		return
+	}
+
 	if mediaType != "image/jpeg" && mediaType != "image/png" {
 		respondWithError(w, http.StatusUnsupportedMediaType, "Unsupported media type", nil)
 		return
 	}
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to read file", err)
+	exts, err := mime.ExtensionsByType(mediaType)
+	if err != nil || len(exts) == 0 {
+		respondWithError(w, http.StatusUnsupportedMediaType, "Unsupported content type", err)
 		return
 	}
+
+	ext := exts[0]
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
@@ -65,9 +76,25 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	str := base64.StdEncoding.EncodeToString(data)
+	key := make([]byte, 32)
+	rand.Read(key)
+	strId := base64.RawURLEncoding.EncodeToString(key)
 
-	url := fmt.Sprintf("data:%s;base64,%s", mediaType, str)
+	path := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%s%s", strId, ext))
+	newFile, err := os.Create(path)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create file", err)
+		return
+	}
+	defer newFile.Close()
+
+	_, err = io.Copy(newFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to copy file", err)
+		return
+	}
+
+	url := fmt.Sprintf("http://localhost:%s/assets/%s%s", cfg.port, strId, ext)
 	video.ThumbnailURL = &url
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
