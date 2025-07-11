@@ -139,7 +139,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s3URL := fmt.Sprintf("%s,%s", cfg.s3Bucket, s3key)
+	s3URL := fmt.Sprintf("%s/%s", cfg.s3CfDistribution, s3key)
 	video.VideoURL = &s3URL
 
 	err = cfg.db.UpdateVideo(video)
@@ -148,13 +148,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	signedVideo, err := cfg.dbVideoToSignedVideo(video)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to sign video URL", err)
-		return
-	}
+	// signedVideo, err := cfg.dbVideoToSignedVideo(video)
+	// if err != nil {
+	// 	respondWithError(w, http.StatusInternalServerError, "Unable to sign video URL", err)
+	// 	return
+	// }
 
-	respondWithJSON(w, http.StatusOK, signedVideo)
+	respondWithJSON(w, http.StatusOK, video)
 }
 
 type Stream struct {
