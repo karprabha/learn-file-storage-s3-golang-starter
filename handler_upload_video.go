@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -88,9 +92,24 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspectRatio, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to get video aspect ratio", err)
+		return
+	}
+
 	tmpFile.Seek(0, io.SeekStart)
 
-	s3key := uuid.New().String() + ext
+	switch aspectRatio {
+	case "16:9":
+		aspectRatio = "landscape"
+	case "9:16":
+		aspectRatio = "portrait"
+	default:
+		aspectRatio = "other"
+	}
+
+	s3key := aspectRatio + "/" + uuid.New().String() + ext
 
 	uploadParams := &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
@@ -115,4 +134,52 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+type Stream struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+type FFProbeOutput struct {
+	Streams []Stream `json:"streams"`
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	err := cmd.Run()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var ffProbeOutput FFProbeOutput
+	err = json.Unmarshal(out.Bytes(), &ffProbeOutput)
+	if err != nil {
+		return "", fmt.Errorf("failed to unmarshal ffprobe output: %w", err)
+	}
+
+	if len(ffProbeOutput.Streams) == 0 {
+		return "", fmt.Errorf("no streams found in the video file")
+	}
+
+	stream := ffProbeOutput.Streams[0]
+
+	width := stream.Width
+	height := stream.Height
+
+	if width == 0 || height == 0 {
+		return "", fmt.Errorf("invalid video dimensions")
+	}
+
+	if width == 16*height/9 {
+		return "16:9", nil
+	} else if height == 16*width/9 {
+		return "9:16", nil
+	} else {
+		return "other", nil
+	}
 }
