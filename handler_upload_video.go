@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -109,12 +110,26 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		aspectRatio = "other"
 	}
 
+	processedFilePath, err := processVideoForFastStart(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to process video", err)
+		return
+	}
+	defer os.Remove(processedFilePath)
+
+	processedFile, err := os.Open(processedFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to open processed file", err)
+		return
+	}
+	defer processedFile.Close()
+
 	s3key := aspectRatio + "/" + uuid.New().String() + ext
 
 	uploadParams := &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         aws.String(s3key),
-		Body:        tmpFile,
+		Body:        processedFile,
 		ContentType: aws.String(mediaType),
 	}
 
@@ -182,4 +197,18 @@ func getVideoAspectRatio(filePath string) (string, error) {
 	} else {
 		return "other", nil
 	}
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	dir, fileName := filepath.Split(filePath)
+	outputFilePath := filepath.Join(dir, fileName+".processing")
+
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputFilePath)
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to process video: %w", err)
+	}
+
+	return outputFilePath, nil
 }
